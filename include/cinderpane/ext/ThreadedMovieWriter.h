@@ -1,6 +1,7 @@
 #pragma once
-#include "cinderpane/util/queue.h"
 #include "cinder/qtime/MovieWriter.h"
+#include "cinder/Thread.h"
+#include <boost/lockfree/spsc_queue.hpp>
 
 namespace cinderpane {
   namespace ext {
@@ -48,8 +49,9 @@ namespace cinderpane {
 
         ~ThreadedMovieWriter()
         {
-            finish();
-            stop();
+            if (m_thread.joinable())
+                m_thread.join();
+            m_writer.finish();
         }
 
         void setWriter(cinder::qtime::MovieWriter writer)
@@ -59,23 +61,23 @@ namespace cinderpane {
 
         void start()
         {
-            m_thread = boost::thread(boost::ref(*this));
+            m_thread = std::thread( &ThreadedMovieWriter::runThread, this );
         }
 
         void finish()
         {
-            m_queue.enqueue(Command(Finish));
+            m_queue.push(Command(Finish));
         }
 
         void stop()
         {
-            m_queue.enqueue(Command(Stop));
+            m_queue.push(Command(Stop));
             m_thread.join();
         }
 
         void addFrame(cinder::Surface frame)
         {
-            m_queue.enqueue(Command(Add, frame));
+            m_queue.push(Command(Add, frame));
         }
 
         uint32_t getNumFrames() const
@@ -85,11 +87,12 @@ namespace cinderpane {
             return 0;
         }
 
-        void operator()()
+        void runThread()
         {
+            ci::ThreadSetup threadSetup;
             while ( true ) {
                 Command cmd;
-                m_queue.dequeue(cmd);
+                m_queue.pop(cmd);
                 switch ( cmd.type ) {
                   case None:
                       break;
@@ -111,8 +114,8 @@ namespace cinderpane {
             None, Add, Finish, Stop
         };
         struct Command {
-            CommandType     type;
-            cinder::Surface surface;
+            CommandType         type;
+            cinder::Surface     surface;
 
             Command()
                 : type(None) {}
@@ -120,11 +123,14 @@ namespace cinderpane {
                 : type(type) {}
             Command(CommandType type, cinder::Surface surface)
                 : type(type), surface(surface) {}
+            Command(const Command &rhs)
+                : type(rhs.type), surface(rhs.surface) {}
+            ~Command() {}
         };
 
-        cinder::qtime::MovieWriter         m_writer;
-        cinderpane::concurrent_queue<Command> m_queue;
-        boost::thread                      m_thread;
+        cinder::qtime::MovieWriter          m_writer;
+        boost::lockfree::spsc_queue<Command, boost::lockfree::capacity<128>>     m_queue;
+        std::thread                         m_thread;
     };
 
   }
