@@ -51,7 +51,8 @@ namespace cinderpane {
         {
             if (m_thread.joinable())
                 m_thread.join();
-            m_writer.finish();
+            if (m_writer)
+                m_writer.finish();
         }
 
         void setWriter(cinder::qtime::MovieWriter writer)
